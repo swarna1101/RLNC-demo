@@ -3,16 +3,60 @@
 A minimal Random Linear Network Coding (RLNC) implementation in Go demonstrating network coding advantages over plain gossip in a 4-node mesh network.
 
 ## Quick Start
+
 ```bash
-go get gonum.org/v1/gonum/mat
 go run main.go
 ```
 
+### Optional Flags
+
+- `-loss <prob>`: Simulate packet loss (e.g. `-loss 0.1` for 10% loss)
+- `-field <bits>`: Set Galois Field size (8 or 16, e.g. `-field 16` for GF(2^16))
+
+Example:
+```bash
+go run main.go -loss 0.2 -field 16
+```
+
 ## Core Features
+
 - 64 kB file distribution across 4 nodes
 - RLNC vs plain gossip comparison
-- GF(256) arithmetic for coding operations
+- GF(2^8) and GF(2^16) arithmetic for coding operations (selectable)
 - 2-peer fanout mesh topology
+- Wall-clock latency metrics (p50/p95) for time-to-innovation
+- Packet loss emulation via CLI flag
+- Command-line configuration for field size and loss probability
+
+## Advanced Features
+
+1. **Wall-Clock Latency Metrics**
+   - Tracks when each peer receives its first innovative symbol
+   - Reports p50 and p95 latency percentiles for RLNC and plain gossip
+
+2. **Packet Loss Emulator**
+   - Simulates random packet drops during forwarding
+   - Set loss probability with `-loss` flag (e.g. `-loss 0.1`)
+
+3. **Variable Field Size**
+   - Choose between GF(2^8) and GF(2^16) with `-field` flag
+   - Demonstrates trade-off between rank-deficiency and processing cost
+
+4. **Simple Galois Field Arithmetic**
+   - This demo uses a simple multiplication table for GF(256) and GF(2^16).
+   - **Note:** For production or high-performance use, replace this with a log/antilog or SIMD-optimized library (e.g. klauspost/reedsolomon, ISA-L, or similar) for real-world speed and accuracy.
+
+## Example Output
+
+```
+Running simulation with:
+  - Packet loss probability: 0.10
+  - Galois Field size: GF(2^16)
+RLNC   avg innovative symbols: 32.0  avg dups: 114.0
+       latency p50: 3.34s  p95: 3.34s
+Plain  avg chunks received   : 60.8  (duplicates not tracked)
+       latency p50: 0s  p95: 0s
+```
 
 ## Implementation Challenges & Solutions
 
@@ -33,29 +77,6 @@ go run main.go
 4. **Plain Gossip Comparison**
    - Challenge: Duplicate packet tracking in gossip mode
    - Solution: Hash-based chunk deduplication using string keys
-
-## Performance Cases
-
-### Case 1: Initial Implementation
-```
-RLNC   avg innovative symbols: 48.0  avg dups: 112.0
-Plain  avg chunks received   : 64.0  (duplicates not tracked)
-```
-- RLNC underperformed due to:
-  - Strict SVD threshold (1e-9)
-  - Insufficient symbol mixing
-  - Small channel buffers
-
-### Case 2: Optimized Implementation
-```
-RLNC   avg innovative symbols: 64.0  avg dups: 160.0
-Plain  avg chunks received   : 64.0  (duplicates not tracked)
-```
-- Both protocols achieve full recovery
-- RLNC shows better resilience through:
-  - Guaranteed delivery via linear combinations
-  - Natural deduplication
-  - Better handling of network conditions
 
 ## Protocol Flow
 
