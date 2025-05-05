@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/klauspost/reedsolomon"
 	"gonum.org/v1/gonum/mat"
 )
 
@@ -272,6 +273,72 @@ func simulate(plain bool, lossProb float64, fieldBits int) (avgInnov, avgDup flo
 	return
 }
 
+func simulateRS(lossProb float64) (avgInnov, avgDup float64, latencies []time.Duration) {
+	// RS parameters
+	n := k * 2 // n = 2k for redundancy
+	enc, err := reedsolomon.New(k, n-k)
+	if err != nil {
+		panic(err)
+	}
+
+	src := make([]byte, fileSize)
+	crand.Read(src)
+	blocks := make([][]byte, k)
+	for i := 0; i < k; i++ {
+		blocks[i] = src[i*chunkSize : (i+1)*chunkSize]
+	}
+	shards := make([][]byte, n)
+	for i := 0; i < k; i++ {
+		shards[i] = make([]byte, chunkSize)
+		copy(shards[i], blocks[i])
+	}
+	for i := k; i < n; i++ {
+		shards[i] = make([]byte, chunkSize)
+	}
+	if err := enc.Encode(shards); err != nil {
+		panic(err)
+	}
+
+	// Simulate peers
+	peers := make([]map[string]bool, numPeers)
+	dupCounts := make([]int, numPeers)
+	firstTimes := make([]time.Time, numPeers)
+	startTime := time.Now()
+
+	// Each peer receives shards via lossy forwarding
+	for i := 0; i < n; i++ {
+		for p := 0; p < numPeers; p++ {
+			if rand.Float64() < lossProb {
+				continue
+			}
+			if peers[p] == nil {
+				peers[p] = make(map[string]bool)
+			}
+			key := string(shards[i])
+			if !peers[p][key] {
+				peers[p][key] = true
+				if len(peers[p]) == 1 {
+					firstTimes[p] = time.Now()
+				}
+			} else {
+				dupCounts[p]++
+			}
+		}
+	}
+
+	// Tally results
+	for p := 0; p < numPeers; p++ {
+		avgInnov += float64(len(peers[p]))
+		avgDup += float64(dupCounts[p])
+		if !firstTimes[p].IsZero() {
+			latencies = append(latencies, firstTimes[p].Sub(startTime))
+		}
+	}
+	avgInnov /= float64(numPeers)
+	avgDup /= float64(numPeers)
+	return
+}
+
 func computeLatencyStats(latencies []time.Duration) (p50, p95 time.Duration) {
 	if len(latencies) == 0 {
 		return 0, 0
@@ -288,6 +355,8 @@ func main() {
 	// Parse command line flags
 	lossProb := flag.Float64("loss", 0.0, "Packet loss probability (0.0 to 1.0)")
 	fieldBits := flag.Int("field", 8, "Number of bits for Galois Field (8 or 16)")
+	codeType := flag.String("code", "rlnc", "Coding scheme: rlnc, rs, or plain")
+	compare := flag.Bool("compare", false, "Compare RLNC, RS, and plain side by side")
 	flag.Parse()
 
 	if *fieldBits != 8 && *fieldBits != 16 {
@@ -301,15 +370,40 @@ func main() {
 	fmt.Printf("  - Packet loss probability: %.2f\n", *lossProb)
 	fmt.Printf("  - Galois Field size: GF(2^%d)\n", *fieldBits)
 
-	// Run RLNC simulation
-	innov, dup, latencies := simulate(false, *lossProb, *fieldBits)
-	p50, p95 := computeLatencyStats(latencies)
-	fmt.Printf("RLNC   avg innovative symbols: %.1f  avg dups: %.1f\n", innov, dup)
-	fmt.Printf("       latency p50: %v  p95: %v\n", p50, p95)
+	if *compare {
+		// Run RLNC, RS, and plain and print a markdown table
+		innovR, dupR, latR := simulate(false, *lossProb, *fieldBits)
+		p50R, p95R := computeLatencyStats(latR)
+		innovS, dupS, latS := simulateRS(*lossProb)
+		p50S, p95S := computeLatencyStats(latS)
+		innovP, _, latP := simulate(true, *lossProb, *fieldBits)
+		p50P, p95P := computeLatencyStats(latP)
+		fmt.Println("\n| Scheme | Avg Innovative | Avg Dups | Latency p50 | Latency p95 |")
+		fmt.Println("|--------|----------------|----------|-------------|-------------|")
+		fmt.Printf("| RLNC   | %.1f           | %.1f     | %v   | %v   |\n", innovR, dupR, p50R, p95R)
+		fmt.Printf("| RS     | %.1f           | %.1f     | %v   | %v   |\n", innovS, dupS, p50S, p95S)
+		fmt.Printf("| Plain  | %.1f           |    -     | %v   | %v   |\n", innovP, p50P, p95P)
+		return
+	}
 
-	// Run plain gossip simulation
-	innov, _, latencies = simulate(true, *lossProb, *fieldBits)
-	p50, p95 = computeLatencyStats(latencies)
-	fmt.Printf("Plain  avg chunks received   : %.1f  (duplicates not tracked)\n", innov)
-	fmt.Printf("       latency p50: %v  p95: %v\n", p50, p95)
+	fmt.Printf("  - Coding scheme: %s\n", *codeType)
+
+	if *codeType == "rlnc" {
+		innov, dup, latencies := simulate(false, *lossProb, *fieldBits)
+		p50, p95 := computeLatencyStats(latencies)
+		fmt.Printf("RLNC   avg innovative symbols: %.1f  avg dups: %.1f\n", innov, dup)
+		fmt.Printf("       latency p50: %v  p95: %v\n", p50, p95)
+	} else if *codeType == "rs" {
+		innov, dup, latencies := simulateRS(*lossProb)
+		p50, p95 := computeLatencyStats(latencies)
+		fmt.Printf("RS     avg innovative symbols: %.1f  avg dups: %.1f\n", innov, dup)
+		fmt.Printf("       latency p50: %v  p95: %v\n", p50, p95)
+	} else if *codeType == "plain" {
+		innov, _, latencies := simulate(true, *lossProb, *fieldBits)
+		p50, p95 := computeLatencyStats(latencies)
+		fmt.Printf("Plain  avg chunks received   : %.1f  (duplicates not tracked)\n", innov)
+		fmt.Printf("       latency p50: %v  p95: %v\n", p50, p95)
+	} else {
+		fmt.Println("Unknown code type. Use 'rlnc', 'rs', or 'plain'.")
+	}
 }

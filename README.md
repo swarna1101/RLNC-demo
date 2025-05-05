@@ -1,6 +1,6 @@
 # RLNC Toy Implementation
 
-A minimal Random Linear Network Coding (RLNC) implementation in Go demonstrating network coding advantages over plain gossip in a 4-node mesh network.
+A minimal Random Linear Network Coding (RLNC) implementation in Go demonstrating network coding advantages over plain gossip and Reed-Solomon in a 4-node mesh network.
 
 ## Quick Start
 
@@ -12,16 +12,56 @@ go run main.go
 
 - `-loss <prob>`: Simulate packet loss (e.g. `-loss 0.1` for 10% loss)
 - `-field <bits>`: Set Galois Field size (8 or 16, e.g. `-field 16` for GF(2^16))
+- `-code <rlnc|rs|plain>`: Choose RLNC (default), Reed-Solomon (RS), or plain gossip
+- `-compare`: Run RLNC, RS, and plain gossip and print a markdown table comparison
 
 Example:
 ```bash
-go run main.go -loss 0.2 -field 16
+go run main.go -loss 0.2 -compare
 ```
+
+## RLNC vs Reed-Solomon vs Plain Gossip Comparison
+
+You can directly compare RLNC, RS, and plain gossip performance with the `-compare` flag. This runs all three schemes under the same simulated network conditions and prints a markdown table:
+
+```
+go run main.go -loss 0.2 -compare
+
+| Scheme | Avg Innovative | Avg Dups | Latency p50 | Latency p95 |
+|--------|----------------|----------|-------------|-------------|
+| RLNC   | 64.0           | 108.2    | 964.875µs   | 1.003416ms  |
+| RS     | 99.2           | 0.0      | 14.667µs    | 15.167µs    |
+| Plain  | 48.0           |    -     | 0s          | 0s          |
+```
+
+### What Does Each Mode Demonstrate?
+- **RLNC**: Robust to loss and duplication, recovers with high probability, but may receive many duplicate (non-innovative) symbols. Best for lossy, distributed, or peer-to-peer networks.
+- **RS**: Classic erasure coding, efficient if all unique blocks are received, but not robust to loss or duplication in a network. Best for point-to-point or storage scenarios.
+- **Plain**: Simple gossip/broadcast, no coding, just forwards chunks. Susceptible to loss and duplicates, and less efficient in large or lossy networks.
+
+### What Do the Metrics Mean?
+- **Avg Innovative**: Number of unique (innovative) symbols/blocks received per peer.
+- **Avg Dups**: Number of duplicate (non-innovative) symbols/blocks received per peer (not tracked for plain gossip).
+- **Latency p50/p95**: Median and 95th percentile time to receive the first innovative symbol/block.
+
+#### Why is RLNC's Duplicate Count Higher?
+- RLNC uses random mixing and forwarding, so peers often receive many non-innovative (duplicate) symbols before collecting enough innovative ones to decode. This is a trade-off for robustness and flexibility in lossy, distributed networks.
+- RS forwards only unique blocks, so duplicates are almost always zero. However, if a peer misses even a few unique blocks, it cannot decode—RS is less robust in lossy/distributed settings.
+- Plain gossip does not track duplicates, but is generally less efficient and robust than RLNC.
+
+#### Summary Table
+| Scheme | Duplicates | Robustness to Loss | Decoding Flexibility | Use Case                  |
+|--------|------------|--------------------|---------------------|---------------------------|
+| RLNC   | High       | High               | High                | Distributed, lossy, P2P   |
+| RS     | Low/Zero   | Low                | Low                 | Storage, point-to-point   |
+| Plain  | -          | Low                | Low                 | Simple broadcast/gossip   |
+
+**Bottom line:** RLNC is more robust and flexible in lossy or distributed networks, at the cost of more duplicates. RS is bandwidth-efficient but less robust in such environments. Plain gossip is simplest, but least robust and efficient.
 
 ## Core Features
 
 - 64 kB file distribution across 4 nodes
-- RLNC vs plain gossip comparison
+- RLNC vs plain gossip and RS comparison
 - GF(2^8) and GF(2^16) arithmetic for coding operations (selectable)
 - 2-peer fanout mesh topology
 - Wall-clock latency metrics (p50/p95) for time-to-innovation
