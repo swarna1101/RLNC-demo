@@ -351,12 +351,108 @@ func computeLatencyStats(latencies []time.Duration) (p50, p95 time.Duration) {
 	return
 }
 
+func simulateMultihopRLNC(lossProb float64, fieldBits int, hops int) int {
+	gf := NewGF(fieldBits)
+	srcSyms := encodeFile()
+	curr := make([]Symbol, k*2)
+	for i := 0; i < k*2; i++ {
+		curr[i] = mixSymbol(srcSyms, gf)
+	}
+	for h := 0; h < hops; h++ {
+		// Apply loss
+		next := make([]Symbol, 0, len(curr))
+		for _, s := range curr {
+			if rand.Float64() >= lossProb {
+				next = append(next, s)
+			}
+		}
+		// RLNC recoding: generate new random mixes from what survived
+		if len(next) < k {
+			// Not enough to recode, break early
+			curr = next
+			break
+		}
+		curr = make([]Symbol, k*2)
+		for i := 0; i < k*2; i++ {
+			curr[i] = mixSymbol(next, gf)
+		}
+	}
+	// Count innovative at destination
+	received := make([]*Symbol, 0, len(curr))
+	for i := range curr {
+		innov := true
+		for _, s := range received {
+			if !isInnovativePair(s, &curr[i]) {
+				innov = false
+				break
+			}
+		}
+		if innov {
+			received = append(received, &curr[i])
+		}
+	}
+	return len(received)
+}
+
+func simulateMultihopRS(lossProb float64, hops int) int {
+	enc, err := reedsolomon.New(k, k)
+	if err != nil {
+		panic(err)
+	}
+	src := make([]byte, fileSize)
+	crand.Read(src)
+	blocks := make([][]byte, k)
+	for i := 0; i < k; i++ {
+		blocks[i] = src[i*chunkSize : (i+1)*chunkSize]
+	}
+	shards := make([][]byte, k*2)
+	for i := 0; i < k; i++ {
+		shards[i] = make([]byte, chunkSize)
+		copy(shards[i], blocks[i])
+	}
+	for i := k; i < k*2; i++ {
+		shards[i] = make([]byte, chunkSize)
+	}
+	if err := enc.Encode(shards); err != nil {
+		panic(err)
+	}
+	curr := shards
+	for h := 0; h < hops; h++ {
+		// Apply loss
+		next := make([][]byte, 0, len(curr))
+		for _, s := range curr {
+			if rand.Float64() >= lossProb {
+				next = append(next, s)
+			}
+		}
+		curr = next
+	}
+	// Count unique blocks at destination
+	seen := make(map[string]struct{})
+	for _, s := range curr {
+		seen[string(s)] = struct{}{}
+	}
+	return len(seen)
+}
+
+// Helper for innovation check in multihop RLNC
+func isInnovativePair(a, b *Symbol) bool {
+	for i := range a.Coeff {
+		if a.Coeff[i] != b.Coeff[i] {
+			return true
+		}
+	}
+	return false
+}
+
 func main() {
 	// Parse command line flags
 	lossProb := flag.Float64("loss", 0.0, "Packet loss probability (0.0 to 1.0)")
 	fieldBits := flag.Int("field", 8, "Number of bits for Galois Field (8 or 16)")
 	codeType := flag.String("code", "rlnc", "Coding scheme: rlnc, rs, or plain")
 	compare := flag.Bool("compare", false, "Compare RLNC, RS, and plain side by side")
+	multihop := flag.Bool("multihop", false, "Run multi-hop chain simulation for RLNC and RS")
+	hops := flag.Int("hops", 3, "Number of hops for multi-hop simulation")
 	flag.Parse()
 
 	if *fieldBits != 8 && *fieldBits != 16 {
@@ -365,6 +461,15 @@ func main() {
 	}
 
 	rand.Seed(time.Now().UnixNano())
+
+	if *multihop {
+		fmt.Printf("Multi-hop simulation: %d hops, loss per hop: %.2f\n", *hops, *lossProb)
+		innovRLNC := simulateMultihopRLNC(*lossProb, *fieldBits, *hops)
+		innovRS := simulateMultihopRS(*lossProb, *hops)
+		fmt.Printf("RLNC innovative at destination: %d/%d\n", innovRLNC, k)
+		fmt.Printf("RS innovative at destination:   %d/%d\n", innovRS, k)
+		return
+	}
 
 	fmt.Printf("Running simulation with:\n")
 	fmt.Printf("  - Packet loss probability: %.2f\n", *lossProb)

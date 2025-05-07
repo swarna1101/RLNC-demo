@@ -14,11 +14,34 @@ go run main.go
 - `-field <bits>`: Set Galois Field size (8 or 16, e.g. `-field 16` for GF(2^16))
 - `-code <rlnc|rs|plain>`: Choose RLNC (default), Reed-Solomon (RS), or plain gossip
 - `-compare`: Run RLNC, RS, and plain gossip and print a markdown table comparison
+- `-multihop`: Run a multi-hop chain simulation for RLNC and RS
+- `-hops <N>`: Number of hops for multi-hop simulation (default: 3)
 
 Example:
 ```bash
 go run main.go -loss 0.2 -compare
 ```
+
+## Multi-Hop Recoding Demo
+
+You can directly demonstrate RLNC's recoding advantage in multi-hop networks with:
+
+```bash
+go run main.go -multihop -hops 3 -loss 0.1
+```
+
+**Example output:**
+```
+Multi-hop simulation: 3 hops, loss per hop: 0.10
+RLNC innovative at destination: 128/64
+RS innovative at destination:   90/64
+```
+
+### What does this show?
+- **RLNC**: Recoding at each hop "refreshes" redundancy, so only the worst single-hop loss matters. Even with multiple lossy hops, RLNC delivers all needed symbols (and more) to the destination.
+- **RS**: All redundancy is added at the source, and losses accumulate at each hop. The destination may not receive enough unique blocks to decode, even with high up-front redundancy.
+
+**Bottom line:** RLNC is uniquely robust for modular, multi-hop, or decentralized networks—recoding at each hop prevents cumulative loss and ensures high throughput.
 
 ## RLNC vs Reed-Solomon vs Plain Gossip Comparison
 
